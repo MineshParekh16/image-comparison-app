@@ -10,7 +10,7 @@ import numpy as np
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-client = MongoClient('mongodb://localhost:27017/')
+client = MongoClient('mongodb+srv://mineshparekh16:dKwReoVwaOFFQN6n@cluster0.ikgzfjh.mongodb.net')
 db = client['image_comparison_db']
 collection = db['images']
 
