@@ -54,7 +54,7 @@ function App() {
     formData.append('image', e.target.image.files[0]);
 
     try {
-      const uploadResponse = await axios.post('http://localhost:5000/upload', formData);
+      const uploadResponse = await axios.post('https://image-comparison-app.onrender.com/upload', formData);
       if (uploadResponse.data.message?.includes('Similar images found')) {
         setSimilarImages(uploadResponse.data.matches);
         alert('Image uploaded and compared successfully!');
@@ -97,7 +97,7 @@ function App() {
             <div className='main-compared-image'>
               {similarImages.map((image, index) => (
                 <div className='compared-image' key={index}>
-                  <img src={`http://localhost:5000/${image.imagePath}`} alt={`Similar image ${index}`} style={{ width: '200px' }} />
+                  <img src={`https://image-comparison-app.onrender.com/${image.imagePath}`} alt={`Similar image ${index}`} style={{ width: '200px' }} />
                   <p>Similarity: {image.matchScore}%</p>
                 </div>
               ))}
