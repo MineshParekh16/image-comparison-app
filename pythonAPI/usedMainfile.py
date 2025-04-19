@@ -6,8 +6,7 @@ import imagehash
 from PIL import Image
 import cv2
 import numpy as np
-from io import BytesIO
-
+import os
 port = int(os.environ.get("PORT", 5000))
 
 app = Flask(__name__)
@@ -20,11 +19,11 @@ collection = db['images']
 OUR_IMAGE_FOLDER = 'our_images'
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg'}
 
-def calculate_hash_from_pil(image: Image.Image, size=(64, 64)):
+def calculate_hash(image_path, size=(64, 64)):
     try:
-        return imagehash.phash(image.convert("L").resize(size))
-    except Exception as e:
-        print("Hashing error:", e)
+        img = Image.open(image_path).convert("L").resize(size)
+        return imagehash.phash(img)
+    except:
         return None
 
 def sync_images_to_db():
@@ -32,7 +31,7 @@ def sync_images_to_db():
         ext = os.path.splitext(file_name)[-1].lower()
         if ext in ALLOWED_EXTENSIONS:
             image_path = os.path.join(OUR_IMAGE_FOLDER, file_name)
-            image_hash = calculate_hash_from_path(image_path)
+            image_hash = calculate_hash(image_path)
             if image_hash:
                 exists = collection.find_one({'imageHash': str(image_hash)})
                 if not exists:
@@ -40,13 +39,6 @@ def sync_images_to_db():
                         'imageHash': str(image_hash),
                         'imagePath': image_path
                     })
-
-def calculate_hash_from_path(image_path, size=(64, 64)):
-    try:
-        img = Image.open(image_path).convert("L").resize(size)
-        return imagehash.phash(img)
-    except:
-        return None
 
 @app.route('/')
 def home():
@@ -61,26 +53,17 @@ def upload_image():
     if file.filename == '':
         return jsonify({'error': 'Empty filename'}), 400
 
-    # Read image in memory using PIL for hash
-    try:
-        image_stream = BytesIO(file.read())
-        pil_image = Image.open(image_stream)
-        uploaded_hash_obj = calculate_hash_from_pil(pil_image)
-        if uploaded_hash_obj is None:
-            return jsonify({'error': 'Failed to process image'}), 500
-        uploaded_hash_str = str(uploaded_hash_obj)
-    except Exception as e:
-        print("Error loading image for hashing:", e)
-        return jsonify({'error': 'Invalid image'}), 400
+    os.makedirs('client_images', exist_ok=True)
+    path = os.path.join('client_images', file.filename)
+    file.save(path)
 
-    # For OpenCV-based comparison, re-read the stream
-    image_stream.seek(0)
-    np_array = np.asarray(bytearray(image_stream.read()), dtype=np.uint8)
-    uploaded_cv_image = cv2.imdecode(np_array, cv2.IMREAD_GRAYSCALE)
-    if uploaded_cv_image is None:
-        return jsonify({'error': 'Failed to decode image for OpenCV'}), 500
+    uploaded_hash_obj = calculate_hash(path)
+    if uploaded_hash_obj is None:
+        return jsonify({'error': 'Failed to process image'}), 500
 
-    # 1. Exact hash match
+    uploaded_hash_str = str(uploaded_hash_obj)
+
+    # 1. Exact match using hash
     exact_match = collection.find_one({'imageHash': uploaded_hash_str})
     if exact_match:
         return jsonify({
@@ -92,12 +75,13 @@ def upload_image():
             }]
         }), 200
 
-    # 2. Similar hash match
+    # 2. Similar match using hash
     matches = []
     for doc in collection.find():
         db_hash_str = doc.get('imageHash')
         if db_hash_str is None:
-            continue
+            continue  # Skip entries without hash
+
         try:
             db_hash_obj = imagehash.hex_to_hash(db_hash_str)
             distance = uploaded_hash_obj - db_hash_obj
@@ -118,14 +102,15 @@ def upload_image():
             'matches': sorted(matches, key=lambda x: -x['matchScore'])
         }), 200
 
-    # 3. ORB cropped match
-    def orb_feature_match(uploaded_img, full_img_path, match_threshold=30):
+    # 3. Fallback: ORB-based cropped image detection
+    def orb_feature_match(cropped_img_path, full_img_path, match_threshold=10):
+        cropped_img = cv2.imread(cropped_img_path, cv2.IMREAD_GRAYSCALE)
         full_img = cv2.imread(full_img_path, cv2.IMREAD_GRAYSCALE)
-        if uploaded_img is None or full_img is None:
+        if cropped_img is None or full_img is None:
             return None, 0
 
         orb = cv2.ORB_create()
-        kp1, des1 = orb.detectAndCompute(uploaded_img, None)
+        kp1, des1 = orb.detectAndCompute(cropped_img, None)
         kp2, des2 = orb.detectAndCompute(full_img, None)
 
         if des1 is None or des2 is None:
@@ -134,6 +119,7 @@ def upload_image():
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         matches = bf.match(des1, des2)
         good_matches = [m for m in matches if m.distance < 50]
+
         return good_matches, len(good_matches)
 
     orb_matches = []
@@ -142,7 +128,7 @@ def upload_image():
         if not os.path.exists(db_path):
             continue
 
-        good_matches, good_count = orb_feature_match(uploaded_cv_image, db_path)
+        good_matches, good_count = orb_feature_match(path, db_path)
         if good_matches is not None and good_count >= 30:
             orb_matches.append({
                 'matchScore': good_count,
